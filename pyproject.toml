@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sieve-csv"
+dynamic = ["version"]
+description = "CSV loader that detects dialect and table structure and repairs damaged rows from the file's bytes alone"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Ken Wu", email = "wooqianghao@gmail.com" }]
+requires-python = ">=3.8"
+dependencies = []  # standard library only
+keywords = ["csv", "dialect", "sniffer", "data loading", "pollock"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Topic :: Text Processing",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+sieve = "sieve.__main__:main"
+
+[project.urls]
+Source = "https://github.com/KenWuqianghao/sieve"
+Benchmark = "https://github.com/HPI-Information-Systems/Pollock"
+
+[tool.setuptools]
+packages = ["sieve"]
+
+[tool.setuptools.dynamic]
+version = { attr = "sieve.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,14 @@
+  # The sieve-client service for Pollock's docker-compose.yml: paste it under `services:`
+  # and run `docker-compose up sieve-client`. No parameters are mounted or read.
+  sieve-client:
+    environment:
+      - DATASET=${DATASET}
+    build:
+      context: .
+      dockerfile: ./sut/sieve/Dockerfile
+    volumes:
+      - ./results/sieve:/results/sieve
+      - ./polluted_files:/polluted_files
+      - ./survey_sample:/survey_sample
+      - ./sut/sieve/:/app/
+      - ./sut/utils.py:/app/utils.py
