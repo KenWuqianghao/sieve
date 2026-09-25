@@ -185,11 +185,11 @@ def test_unrepairable_row_does_not_cut_table():
     assert len(out) == len(T)
 
 
-@pytest.mark.xfail(strict=True, reason="known limitation: when every quoted field "
-                   "holds exactly one delimiter, the wrong quote char (') splits each of them "
-                   "into two and yields a perfectly regular table that matches a header with one "
-                   "extra separator, so the dialect score prefers it")
 def test_uniform_quoted_delimiters_with_damaged_header():
+    # every quoted field holds exactly one delimiter, and the header has one extra separator.
+    # sieve 0.1 (strict expected failure) took ' as the quote char: it splits each quoted field
+    # into two and gives a perfectly regular table that matches the damaged header. Since 0.2 a
+    # quote char must enclose at least one field, and ' encloses none here.
     rows = [r[:] for r in T]
     for r in rows[1:]:
         r[5] = r[5].replace(",", "") .replace(" and ", ", ")  # exactly one comma, quoted

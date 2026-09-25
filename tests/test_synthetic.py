@@ -16,10 +16,10 @@ from conftest import ROOT, load_module
 
 c0 = load_module(os.path.join(ROOT, "harness", "baseline", "c0_csvsniff.py"), "c0_ref")
 
-# Known limitation, kept as an expected failure: H5 (escape only on positive evidence) fixes it
-# but was not kept (no dev gain; see EXPERIMENTS.md). sieve reads `\'` as an escaped
-# apostrophe and drops the backslash.
-XFAIL = {"esc_literal_backslash_apos": "H5 not kept: a literal backslash before ' is dropped"}
+# Expected failures (strict). sieve 0.1 had one, esc_literal_backslash_apos (a literal backslash
+# before ' was dropped, since \ was tried as the escape char wherever it occurred). Since 0.2 the
+# escape char needs evidence (it must precede the delimiter or the quote char), so it passes.
+XFAIL = {}
 
 
 @pytest.mark.parametrize("name,kind,data,expected",

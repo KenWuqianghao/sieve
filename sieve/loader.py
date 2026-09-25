@@ -2,14 +2,20 @@
 
 Input: the file's bytes only. Output: list of rows (first row = header when the file has one;
 a headerless file is emitted as-is, since no header is invented). The labels in parentheses
-(c1, H2b, ...) name the experiment that introduced a stage; see EXPERIMENTS.md in
+(c1, H2b, d1, ...) name the experiment that introduced a stage; see EXPERIMENTS.md in
 https://github.com/KenWuqianghao/sieve. Stages:
   1. decode   BOM sniff (utf-8/utf-16/32), else strict utf-8, else cp1252, else latin-1.
-  2. dialect  grid over delimiter x quotechar x escapechar x skipinitialspace, each parsed with
-              csv.reader on a sample and scored CleverCSV-style: Q = P * T, where P rewards
-              many rows sharing few widths ((1/K) * sum_k N_k (L_k - 1) / L_k, K = number of
-              distinct widths) and T is the share of cells matching a known type. Ties prefer
-              the conventional choice (',', '"', no escape).
+  2. dialect (d1-d5, sieve 0.2)  grid over delimiter x quotechar x escapechar x
+              skipinitialspace, each parsed with csv.reader on a 64 KB sample and scored
+              CleverCSV-style: Q = P * T, where P rewards many rows sharing few widths
+              ((1/K) * sum_k N_k (L_k - 1) / L_k, K = number of distinct widths) and T is the
+              share of cells matching a known type. Usage evidence (d1): "no quote" is in the
+              grid, a quote char is tried only if it encloses a field, '\\' only if it precedes
+              the delimiter or the quote char; ties keep the simpler candidate unless the added
+              quote / escape char changes the parse. URLs and clock times are masked before
+              scoring (d2). Clean text is single-spaced words, with a comma only under ',' or
+              quoting (d3). A "no delimiter" candidate competes with a space winner (d5).
+              load() reads a file without a quote char with '"' (the repairs need one).
   3. structure  drop blank rows; drop a sparse preamble ended by a blank line; join a stack of
               leading header-like rows (multi-row header) with ' '; cut at the first blank-line-
               separated second table whose first row is header-like.
@@ -93,8 +99,46 @@ def decode(data: bytes) -> str:
 
 
 def parse(text, delim, quote, esc, skipsp):
+    if quote is None:  # no quoting at all (the CSV Wrangling "" quote char)
+        return list(csv.reader(io.StringIO(text, newline=""), delimiter=delim, quotechar=None,
+                               quoting=csv.QUOTE_NONE, escapechar=esc,
+                               skipinitialspace=skipsp, strict=False))
     return list(csv.reader(io.StringIO(text, newline=""), delimiter=delim, quotechar=quote,
                            escapechar=esc, doublequote=True, skipinitialspace=skipsp, strict=False))
+
+
+@functools.lru_cache(maxsize=256)
+def _enclose_re(d, q):
+    """A field enclosed by q under delimiter d: q opens at a line start or right after d
+    (optionally after spaces) and its closing q (doubled qq stays inside) sits right before d,
+    spaces, or a line end."""
+    D, Q = re.escape(d), re.escape(q)
+    return re.compile(rf"(?:^|(?<=[{D}\r\n])) *{Q}(?:[^{Q}]|{Q}{Q})*{Q} *(?={D}|\r|\n|\Z)")
+
+
+@functools.lru_cache(maxsize=256)
+def _enclose_esc_re(d, q):
+    """As _enclose_re, with a backslash escaping the next char inside the field (\\q stays in)."""
+    D, Q = re.escape(d), re.escape(q)
+    return re.compile(rf"(?:^|(?<=[{D}\r\n])) *{Q}(?:[^{Q}\\]|{Q}{Q}|\\[\s\S])*{Q} *(?={D}|\r|\n|\Z)")
+
+
+def encloses(sample, d, q):
+    """Usage evidence (d1): q is a quote char only if it encloses at least one field. When
+    backslash-quote occurs in the sample, a field whose quotes are backslash-escaped counts
+    too (`"2\\" pipe, 3m"`), so that a file quoting every such field still gets its quote char
+    and the escape candidate is tried (a change made when the detector moved into sieve)."""
+    if q not in sample:
+        return False
+    if _enclose_re(d, q).search(sample) is not None:
+        return True
+    return ("\\" + q) in sample and _enclose_esc_re(d, q).search(sample) is not None
+
+
+def escapes(sample, e, d, q):
+    """Usage evidence (d1, CleverCSV's potential-escape rule): e is an escape char only if it
+    immediately precedes the delimiter or the quote char somewhere in the sample."""
+    return (e + d) in sample or (q is not None and (e + q) in sample)
 
 
 _STRONG = re.compile("|".join(f"(?:{t.pattern})" for t in _TYPES[1:-1]))
@@ -108,18 +152,25 @@ def strong(cell):
     return bool(_STRONG.match(c))
 
 
-# empty | strong | plain in one regex; plain words first, as most typed cells match it early
-# (the order of the alternatives cannot change whether one of them matches)
-_ANY = re.compile("|".join(f"(?:{t.pattern})" for t in [_TYPES[-1]] + _TYPES[:-1]))
+# Clean text for the dialect score (d3): words separated by single spaces. A comma may appear in
+# it only when ',' is the delimiter being scored or the scored dialect quotes (a quoted field
+# may hold commas); otherwise a comma left inside a cell means the split missed a delimiter.
+# ; TAB | : are never part of clean text. empty | strong | clean text in one regex; clean text
+# first, as most typed cells match it early (the order cannot change whether one matches).
+_WORD = r"[\w'&().,/-]+"
+_PLAIN_COMMA = rf"^{_WORD}(?: {_WORD})*$"
+_PLAIN_NOCOMMA = _PLAIN_COMMA.replace(",", "")
+_ANY_COMMA = re.compile("|".join(f"(?:{p})" for p in [_PLAIN_COMMA] + [t.pattern for t in _TYPES[:-1]]))
+_ANY_NOCOMMA = re.compile("|".join(f"(?:{p})" for p in [_PLAIN_NOCOMMA] + [t.pattern for t in _TYPES[:-1]]))
 
 
 @functools.lru_cache(maxsize=1 << 16)
-def typed(cell):
-    # == (not c) or strong(c) or _PLAIN.match(c), in one regex pass
-    return bool(_ANY.match(cell.strip()))
+def typed(cell, comma_ok=True):
+    # == (not c) or strong(c) or clean text, in one regex pass
+    return bool((_ANY_COMMA if comma_ok else _ANY_NOCOMMA).match(cell.strip()))
 
 
-def dialect_score(rows):
+def dialect_score(rows, d=",", q=None):
     rows = [r for r in rows if r]
     if not rows:
         return 0.0
@@ -128,38 +179,116 @@ def dialect_score(rows):
     # count distinct cell values once each (C-level Counter), then type each distinct value
     cells = Counter(chain.from_iterable(rows))
     n_cells = sum(widths[w] * w for w in widths)
-    t = sum(compress(cells.values(), map(typed, cells))) / n_cells if n_cells else 0.0
+    ok = d == "," or q is not None
+    t = sum(compress(cells.values(), (typed(c, ok) for c in cells))) / n_cells if n_cells else 0.0
     return p * t
 
 
-def sniff(text):
+# Masking (d2): URLs and clock times hold ':' (and URLs '/', '.', '?', '&', '=') that are not
+# delimiters; the grid scores a sample in which each is replaced by a one-character token
+# (CleverCSV's filter_urls, narrowed to scheme:// and www. URLs so that a real key:value colon
+# survives). A URL stops at whitespace, a quote char or a candidate delimiter other than ':'.
+# A clock time is h:mm or hh:mm[:ss[.fff]] not inside a longer run of digits and colons.
+_URL = re.compile(r"\b(?:[A-Za-z][A-Za-z0-9+.-]{1,15}://|www\.)[^\s,;|\"'<>]+")
+_CLOCK = re.compile(r"(?<![\d:])\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?![\d:])")
+
+
+def mask(sample):
+    if ":" not in sample and "www." not in sample:
+        return sample
+    return _CLOCK.sub("0", _URL.sub("U", sample))
+
+
+NONE = ""  # the "no delimiter" candidate (d5): a private-use char, only tried on a sample
+# that lacks it (not NUL: csv on Python <= 3.10 rejects a NUL delimiter). Internal only:
+# load() never writes it into a cell.
+NONE_P = 0.15
+
+
+def _type_score(rows, comma_ok):
+    cells = Counter(chain.from_iterable(r for r in rows if r))
+    n = sum(cells.values())
+    return sum(compress(cells.values(), (typed(c, comma_ok) for c in cells))) / n if n else 0.0
+
+
+def sample_of(text):
+    """The first 64 KB of the text, cut at the last line end so no torn line is scored."""
     sample = text[:SAMPLE]
-    if len(text) > SAMPLE:  # do not score a torn last line
+    if len(text) > SAMPLE:
         cut = max(sample.rfind("\n"), sample.rfind("\r"))
         sample = sample[:cut] if cut > 0 else sample
-    best, best_q = (",", '"', None, False), -1.0
-    # parses that cannot differ from one already scored are skipped (a tie never wins):
-    # a second quote char when neither occurs in the sample, and skipinitialspace when no
-    # field starts with a space
-    both_quotes_absent = not any(q in sample for q in QUOTES)
-    for d in DELIMS:
-        if d not in sample:
-            continue
+    return sample
+
+
+def sniff(text):
+    """-> (delimiter, quotechar or None, escapechar or None, skipinitialspace) for the text.
+
+    Quote candidates: "no quoting", then the chars that enclose at least one field under d;
+    escape candidates: none, then '\\' only where it precedes d or q (d1). A later candidate
+    wins on a strictly higher score, or on a tie with the current best when it adds exactly
+    one thing to it (a quote char to no quoting, or an escape to no escape) and that thing
+    changes the parse, i.e. it is used (CleverCSV's tie rules; an escape also needs mid-field
+    evidence). skipinitialspace is tried only when some field starts with a space. With no
+    candidate delimiter at all (a one-column file) the quote char is still decided, under ','.
+    """
+    sample = mask(sample_of(text))
+    best, best_q, best_rows = (",", None, None, False), -1.0, None
+    for d in [d for d in DELIMS if d in sample] or [","]:
         sp_matters = (d + " ") in sample or sample[:1] == " " or "\n " in sample or "\r " in sample
-        for qi, q in enumerate(QUOTES):
-            if qi and both_quotes_absent:
-                continue
+        for q in [None] + [q for q in QUOTES if encloses(sample, d, q)]:
             for e in ESCAPES:
-                if e is not None and e not in sample:
+                if e is not None and not escapes(sample, e, d, q):
                     continue
                 for sp in ((False, True) if d != " " and sp_matters else (False,)):
                     try:
-                        s = dialect_score(parse(sample, d, q, e, sp))
+                        rows = parse(sample, d, q, e, sp)
                     except csv.Error:
                         continue
-                    if s > best_q + 1e-9:  # strict: earlier (conventional) candidates win ties
-                        best, best_q = (d, q, e, sp), s
-    return best
+                    s = dialect_score(rows, d, q)
+                    if s > best_q + 1e-9:  # strict: earlier (simpler) candidates win ties
+                        best, best_q, best_rows = (d, q, e, sp), s, rows
+                    elif (s >= best_q - 1e-9 and _adds_one(best, (d, q, e, sp)) and rows != best_rows
+                          and (e is None or mid_field_escape(sample, e, d, q))):
+                        best, best_q, best_rows = (d, q, e, sp), s, rows
+    # d5: "no delimiter" (NONE, a char that does not occur: each record is one cell) is tried
+    # last, against a space winner only, and must beat it strictly. Space is the one candidate
+    # that clean text itself contains, so "split on spaces" vs "do not split" is the comparison
+    # the grid never made; a comma, ';', TAB, '|' or ':' left inside a one-cell record is
+    # already untyped (d3). The pattern term is 0 for a width-1 table, so the candidate is
+    # scored NONE_P x its type score; NONE_P = 0.15 < 0.5, the pattern term of a consistent
+    # two-column split, so a consistent space split with >= 30% clean cells always wins.
+    # Quote candidates: a char enclosing whole records.
+    if NONE in sample or best[0] != " ":
+        return best
+    nb, nq, nrows = None, -1.0, None
+    for q in [None] + [q for q in QUOTES if encloses(sample, NONE, q)]:
+        try:
+            rows = parse(sample, NONE, q, None, False)
+        except csv.Error:
+            continue
+        s = NONE_P * _type_score(rows, q is not None)
+        if s > nq + 1e-9 or (s >= nq - 1e-9 and nb is not None and _adds_one(nb, (NONE, q, None, False))
+                             and rows != nrows):
+            nb, nq, nrows = (NONE, q, None, False), s, rows
+    return nb if nb is not None and nq > best_q + 1e-9 else best
+
+
+def mid_field_escape(sample, e, d, q):
+    """Tie evidence that e is used as an escape: e + quote followed by ordinary text (without
+    the escape, that quote would close the field mid-text). e + a doubled quote is a literal e
+    before a doublequote-escaped quote; e + quote before d or a line end can be a literal e
+    ending the field (a Windows path)."""
+    if q is None:
+        return False
+    return re.search(re.escape(e + q) + f"[^{re.escape(q + d)}\r\n]", sample) is not None
+
+
+def _adds_one(a, b):
+    """b = a plus a quote char (a has none) or plus an escape char (a has none), else equal."""
+    if a[0] != b[0] or a[3] != b[3]:
+        return False
+    return ((a[1] is None and b[1] is not None and a[2] == b[2])
+            or (a[2] is None and b[2] is not None and a[1] == b[1]))
 
 
 def is_blank(r):
@@ -335,7 +464,7 @@ def repair_stray_quotes(text, d, q, e, sp):
         return text, None
     spans = [b - a for _, a, b in recs]
     multi_line_rare = sum(1 for s in spans if s == 0) >= 0.9 * len(spans)
-    ph = next(chr(c) for c in range(0xE000, 0xF8FF) if chr(c) not in text)
+    ph = next(chr(c) for c in range(0xE000, 0xF8FF) if chr(c) not in text and chr(c) != d)
 
     def n_broken(rs, limit):
         # broken records starting before `limit` (a window after the record under repair keeps
@@ -873,6 +1002,11 @@ def load(data: bytes):
         return []
     text = decode(data)
     d, q, e, sp = sniff(text)
+    if d == NONE and NONE in text:  # one column, and the sentinel occurs after the sample:
+        d = next(chr(c) for c in range(0xE000, 0xF8FF) if chr(c) not in text)  # any absent char
+    # the repair stages work on a quote char: "no quote" is read with '"' (a file in which '"'
+    # never opens a field parses the same, and a broken quoted record can still be repaired)
+    q = q or '"'
     text = repair_row_delimiters(text, d, q, e, sp)
     text, ph = repair_stray_quotes(text, d, q, e, sp)
     text = repair_merged_cells(text, d, q, e, sp)
