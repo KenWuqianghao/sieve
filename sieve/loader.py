@@ -16,6 +16,8 @@ https://github.com/KenWuqianghao/sieve. Stages:
               scoring (d2). Clean text is single-spaced words, with a comma only under ',' or
               quoting (d3). A "no delimiter" candidate competes with a space winner (d5).
               load() reads a file without a quote char with '"' (the repairs need one).
+              The first-record header test (d4) serves sieve.sniff() only; load() keeps the
+              structure stage's header_like().
   3. structure  drop blank rows; drop a sparse preamble ended by a blank line; join a stack of
               leading header-like rows (multi-row header) with ' '; cut at the first blank-line-
               separated second table whose first row is header-like.
@@ -200,8 +202,8 @@ def mask(sample):
 
 
 NONE = ""  # the "no delimiter" candidate (d5): a private-use char, only tried on a sample
-# that lacks it (not NUL: csv on Python <= 3.10 rejects a NUL delimiter). Internal only:
-# load() never writes it into a cell.
+# that lacks it (not NUL: csv on Python <= 3.10 rejects a NUL delimiter). Internal only: the
+# public sniff() reports None, and load() never writes it into a cell.
 NONE_P = 0.15
 
 
@@ -350,6 +352,138 @@ def structure(rows):
                   for i in range(width)]
         rows = [joined] + rows[k:]
     return rows
+
+
+# ---------------------------------------------------------------- first-record header (d4)
+# The public sniff() asks whether the FIRST non-blank record is a header (a record whose cells
+# name the columns of the records that follow). load() does not use this: its structure() stage
+# judges the table left after a preamble cut with header_like(). Cues, each over parsed cells:
+#   - title / comment: a first record with one non-empty cell over a body that has several, or
+#     a '#' comment line, is a preamble, not a header;
+#   - names: a header's non-empty cells are distinct and none is strongly typed data;
+#   - type contrast in ANY column: the header cell is text (has a letter, not strongly typed,
+#     does not recur below) while >= 2/3 of the non-empty cells below it are strongly typed;
+#   - all-text tables (no typed column to contrast with): per text column, a vote for "header"
+#     when the first cell stands outside the body - the body repeats its values (categorical)
+#     and the first cell is not among them, or the body shares a shape (letter case, spaces)
+#     the first cell lacks, or the first cell is longer / shorter than every cell below (>= 4);
+#     a vote for "data" when the first cell recurs below, or has the body's shared shape
+#     without standing out; header when the "header" votes win (csv.Sniffer's vote, over
+#     shapes and categories instead of exact lengths);
+#   - a one-column body under two or more cells is a key/value or format line;
+#   - a header-only file (one record): distinct, untyped, name-like cells.
+_LETTER = re.compile(r"[^\W\d_]")
+
+
+def _name_like(c):
+    """A column name: has a letter, not strongly typed, short, no sentence punctuation."""
+    return (bool(c) and bool(_LETTER.search(c)) and not strong(c) and len(c) <= 40
+            and not re.search(r"[.!?;:]\s", c + " "))
+
+
+def _case_shape(c):
+    letters = [ch for ch in c if ch.isalpha()]
+    if not letters:
+        case = "n"
+    elif all(ch.isupper() for ch in letters):
+        case = "U"
+    elif all(ch.islower() for ch in letters):
+        case = "L"
+    else:
+        case = "M"
+    return case, " " in c
+
+
+def first_record_header(rows, max_body=40):
+    rows = [r for r in rows if r and not is_blank(r)]
+    if not rows:
+        return False
+    first = [c.strip() for c in rows[0]]
+    ne = [c for c in first if c]
+    if len(set(ne)) < len(ne):
+        return False  # repeated cells: not a set of column names
+    if ne[0].startswith("#") and (len(ne[0]) > 1 or len(ne) == 1):
+        return False  # a '#' comment line is a preamble
+    body = rows[1:1 + max_body]
+    if not body:  # header-only file: every cell a name
+        return len(ne) >= 2 and len(ne) == len(first) and all(_name_like(c) for c in ne)
+    counts = sorted(sum(1 for c in r if c.strip()) for r in body)
+    med = counts[len(counts) // 2]
+    widths = sorted(len(r) for r in body)
+    if len(ne) >= 2 and widths[len(widths) // 2] == 1:
+        return False  # two or more names over a one-column body: a key/value or format line
+    if len(ne) == 1 and med >= 2:
+        return False  # a title / note line over a wider table
+    if len(ne) == 2 and 3 * len(ne) <= med and not all(map(_name_like, ne)):
+        return False  # a title with a side note (a date, a unit) over a wider table
+    contrast = 0
+    pos = neg = 0
+    for j, h in enumerate(first):
+        if not h:
+            continue
+        col = [v for v in (r[j].strip() for r in body if j < len(r)) if v]
+        if not col:
+            continue
+        rec = h in col
+        hs = strong(h)
+        n_strong = sum(map(strong, col))
+        if n_strong * 3 >= 2 * len(col):
+            if not hs and not rec and _LETTER.search(h):
+                contrast += 1
+            continue
+        if n_strong or hs or not _LETTER.search(h):
+            continue  # a mixed column, or a typed / letterless first cell: no vote
+        # an all-text column
+        if rec:
+            neg += 1
+            continue
+        shapes = Counter(map(_case_shape, col))
+        sh, n = shapes.most_common(1)[0]
+        uniform = n == len(col)
+        lens = [len(v) for v in col]
+        cue = False
+        if len(col) >= 2 and len(set(col)) * 2 <= len(col):
+            cue = True  # categorical body, the first cell outside its categories
+        if uniform and _case_shape(h) != sh:
+            cue = True  # the body shares a shape (case, spaces) the first cell lacks
+        if len(col) >= 4 and (len(h) > max(lens) or len(h) < min(lens)):
+            cue = True  # the first cell is longer / shorter than every cell below
+        if cue:
+            pos += 1
+        elif uniform:
+            neg += 1  # the first cell has the body's shared shape and length: data-like
+    if contrast:
+        return True
+    return pos > neg
+
+
+def detect(data: bytes):
+    """The public sniff(): bytes -> (delimiter, quotechar, escapechar, has_header).
+
+    None means "none" for each character: no delimiter (one column), no quote char (no field is
+    enclosed by one), no escape char. The internal NONE sentinel never leaves this function.
+    has_header is first_record_header() on the 64 KB sample parsed with the detected dialect.
+    When the sample was cut and the grid chose no quote char, the enclosure test runs on the
+    rest of the file. A delimiter or quote char that does not occur in the text is reported as
+    None (the grid's ',' fallback for a file with no candidate delimiter).
+    """
+    strong.cache_clear()
+    typed.cache_clear()
+    if not data:
+        return None, None, None, False
+    text = decode(data)
+    d, q, e, sp = sniff(text)
+    sample = sample_of(text)
+    try:
+        rows = parse(sample, d, q, e, sp)
+    except csv.Error:
+        rows = []
+    hdr = first_record_header(rows)
+    if q is None and len(sample) < len(text):
+        rest = text[len(sample):]
+        q = next((c for c in QUOTES if encloses(rest, d, c)), None)
+    return (d if d != NONE and d in text else None, q if q and q in text else None,
+            e or None, bool(hdr))
 
 
 # ---------------------------------------------------------------- stray-quote repair (c1)
