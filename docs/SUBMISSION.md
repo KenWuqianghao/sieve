@@ -6,6 +6,11 @@ known limitations, the reproduction commands and the text of the pull request to
 [HPI-Information-Systems/Pollock](https://github.com/HPI-Information-Systems/Pollock) (the same
 shape as the DuckDB results PR, #6). Numbers are from 2026-09-24, Pollock commit `af36a06`.
 
+This document describes sieve **0.1.0** (commit `22cf0ba`), the version the PR text below
+submits. sieve 0.2.0 replaced the dialect detector and scores 9.9972 / 9.9939 on the same
+2,290 files through the same harness (README); `sut/sieve/` in this repository now vendors
+0.2.0, and the 0.2.0 end-to-end Docker run has not been done.
+
 ## Claim in one paragraph
 
 sieve is a pure-Python CSV loader, standard library only (`sieve/`: `loader.py` with about 880

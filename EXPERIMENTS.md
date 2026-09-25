@@ -1,7 +1,8 @@
 # Experiments
 
-The worklog behind the numbers in the README: every experiment in the order it was run (all on
-2026-09-24, in five rounds), kept or dropped, with its numbers. Scores are Pollock simple /
+The worklog behind the numbers in the README: every experiment in the order it was run (the
+Pollock experiments 0-7 on 2026-09-24, in five rounds; the dialect round 8, for 0.2.0, on
+2026-09-24 and 25), kept or dropped, with its numbers. Scores are Pollock simple /
 weighted from the unmodified upstream `evaluate.py` on the 1,200-file dev split unless noted.
 Each scored run is a row of [results.tsv](results.tsv) (columns: time, round, variant, split,
 simple, weighted, the six group means T S L M Q R, files/s, notes).
@@ -37,6 +38,7 @@ M row_more_sep (396), Q row_extra_quote (396), R row_field_delimiter (44).
 | 5 | c5-moresep (H4) | the one surplus empty cell of a W+1 row is dropped | 9.9978 -> 9.9989 | 9.9988 -> 9.9990 | M 9.9969 -> 10.0000 (396/396) | 50.2 | kept | 396 up, 0 worse; held-out check after this |
 | 6 | c6-fast (H7) | profiled hot spots removed; packaging, tests, Pollock SUT | = | = | outputs byte-identical on 2,290 files | 48.0 -> 67.2 | kept | identity change |
 | 7 | c7-escape (H5) | `\` is an escape candidate only with evidence | 9.9989 (=) | 9.9990 (=) | 1 file's output changed, same score | 73.8 | dropped | neither dev score rose |
+| 8 | dialect round (d1-d5), sieve 0.2.0 | a new dialect grid developed on CSV Wrangling, plus `sniff()` | 9.9989 (=) | 9.9990 (=) | all files: T 9.9907 -> 10.0000 (3 held-out multitable files) | 55 (0.1: 59) | kept (0.2.0) | Pollock no worse on any group; CSV Wrangling held-out 94.51 -> 97.72 |
 
 Final, all 2,290 files: **9.9971 / 9.9922** (dev 9.9989 / 9.9990, held-out 9.9952 / 9.9854);
 DuckDB 1.2 given the dialect: 9.9615 / 9.5997; c0: 9.7254 / 9.9843.
@@ -234,6 +236,74 @@ External (report-only, c7 vs c6): escape 99.1 -> 99.6%, full dialect 95.2 -> 95.
 their backslash), 1 worse (a one-column code file where the sniffer falls back to the `'`
 quote; garbage either way). Not in the loader; listed under the known limitations.
 
+## 8: dialect round, d1-d5 (sieve 0.2.0): kept
+
+A separate round on dialect and header detection, developed and scored on the CSV Wrangling
+test set instead of Pollock, then gated on Pollock through this repository's harness.
+
+**Setup.** Corpus: the annotated CSV Wrangling test files still downloadable with the
+annotated md5 and at most 256 KB, 5,146 files (GitHub 3,594, UKdata 1,552), split with seed
+20260924, stratified by source x messy x annotator: dev 3,087 (messy 431), held-out 2,059 (messy
+288). Metric: the paper's (exact equality of delimiter, quote and escape; "none" for an unused
+character; failures wrong; "messy" = non-standard dialect). Header: 200 dev files labelled
+blind under a written protocol (195 decided), tunable; the 89 labels of the external check
+test-only. Starting point d0 = sieve 0.1's `sniff()` + `header_like()` extracted unchanged.
+Keep rule: dev full and dev messy at least the best, one of them (or header) strictly better,
+header not lower by more than one file, no source / annotator slice down by more than 0.3,
+at least 50 files/s; a single-step gain above 3 points counts as a suspected leak until
+confirmed on held-out. Held-out scored once per five keeps, report-only.
+
+| step | change | dev full | dev messy | dev header (195) | verdict |
+|---|---|---|---|---|---|
+| d0 | sieve 0.1's detector | 94.62 | 82.60 | 69.2 | start |
+| d1 | usage evidence: "no quote" in the grid; a quote char only if it encloses a field; `\` only before the delimiter or quote char; ties keep the simpler dialect unless the added char changes the parse (an escape also needs mid-field evidence) | 96.27 | 89.33 | = | kept (messy +6.73, leak-gated) |
+| (d3 on d1) | the stricter clean-text type of d3, tried first on d1 | 97.12 | 89.10 | = | dropped (messy down 0.23: commas inside quoted prose; retried as d3 with a quote clause) |
+| d2 | URL (`scheme://`, `www.`) and clock-time masking before scoring | 96.79 | 90.26 | = | kept |
+| d3 | clean text = single-spaced words, a comma only under `,` or quoting | 97.41 | 90.26 | = | kept |
+| d4 | first-record header test (title / comment / key-value rules, type contrast in any column, all-text column votes) | = | = | 96.9 | kept (header +27.7, leak-gated) |
+| d5 | "no delimiter" candidate (0.15 x type score) against a space winner only | 97.76 | 92.81 | = | kept |
+
+d5 variants that let "no delimiter" compete with every delimiter broke 3 to 13 files annotated
+`,` (one-column lists with commas in a few records), so it competes with space only. Its
+internal sentinel is U+E000 (csv on Python 3.10 rejects a NUL delimiter).
+
+**Held-out checkpoint, run once after d5** (2,059 files): d5 97.72 full / 92.71 messy
+(GitHub 96.80, UKdata 99.84), CleverCSV 0.8.5 96.55 / 88.54, csv.Sniffer 87.47 / 67.36, d0
+94.51 / 86.11. Header on the 89 test labels: d5 94.4 (84/89), CleverCSV 76.4, csv.Sniffer
+76.4, d0 67.4. Both leak gates cleared: the messy gain holds on held-out (+6.60 over d0) and
+the header gain on the test labels (+18.0 over CleverCSV).
+
+**Into sieve.** d1, d2, d3 and d5 replace `sniff()` in `loader.py`; d4 is `sieve.sniff()`'s
+`has_header` and is not used by `load()` (the structure stage keeps `header_like()`). Two
+adaptations for the loader: a file with no quote char is loaded with `"` (the repairs need a
+quote char), and the "no delimiter" sentinel never leaves the loader (`sniff()` reports
+`None`; `load()` swaps in another absent character if U+E000 occurs after the sample). One
+change to the detector: the enclosure test of d1 did not see a field whose quotes are
+backslash-escaped (`"2\" pipe, 3m"`), so a file quoting every such field lost its quote char
+and escape; the synthetic case `esc_backslash_quotes`, which 0.1 passed, failed. The enclosure
+test now also accepts backslash-escaped quotes when backslash-quote occurs. This changed the
+output on none of the 5,146 CSV Wrangling files (an equivalence check against the checkpoint
+detector, no scoring), so the numbers above stand; `sieve.sniff()` equals the checkpoint
+detector on all 5,146 files.
+
+**Pollock, all 2,290 files, report-only** (no tuning in this round):
+
+| | all simple / weighted | dev | held-out | T | S | L | M | Q | R |
+|---|---|---|---|---|---|---|---|---|---|
+| 0.1.0 (re-run) | 9.9971 / 9.9922 | 9.9989 / 9.9990 | 9.9952 / 9.9854 | 9.9907 | 9.5698 | 9.9961 | 10.0000 | 10.0000 | 10.0000 |
+| 0.2.0 | 9.9972 / 9.9939 | 9.9989 / 9.9990 | 9.9953 / 9.9888 | 10.0000 | 9.5698 | 9.9961 | 10.0000 | 10.0000 | 10.0000 |
+
+Outputs differ on 4 files: the three held-out multitable files (9.9599 -> 10: `8\'9"` keeps its
+backslash, since `\` is no longer an escape candidate without evidence; the error profile had
+put their loss on the escape choice of experiment 7) and `file_escape_char_0x00` (keeps its
+backslash, 9.7416 either way, as in experiment 7). No group mean went down. files/s, best of
+three interleaved passes: 0.1.0 59.3, 0.2.0 55.2. Synthetic cases: 14/14 guards, 8/8 positives
+(0.1.0: 7/8). External check (800 files): full dialect 95.2 -> 97.9, header 67.4 -> 94.4 (not
+independent: 478 of the 800 are in the round's dev split; on the other 322, 95.0 -> 98.4).
+Unit tests: the two expected failures that 0.2.0 fixes (`esc_literal_backslash_apos`,
+`test_uniform_quoted_delimiters_with_damaged_header`) are now ordinary tests; 21 `sniff()`
+tests added. The outputs are byte-identical under Python 3.8.20, 3.9.23 and 3.11.15.
+
 ## Not attempted
 
 Ranked by the remaining loss and by what the tests found:
@@ -241,11 +311,9 @@ Ranked by the remaining loss and by what the tests found:
   Pollock never triggers it);
 - the whole-file space delimiter and `'` quote (held-out-only singletons, 0.0021 + 0.0048 of
   the all-files weighted loss);
-- the multitable tail (3 x 0.0006 weighted), which the error profile attributes to the escape
-  choice of experiment 7;
-- an explicit header decision (67% on the external sample against 76% for CleverCSV); it needs
-  a separately labelled development sample, since the 89 external labels are a test set;
-- quote choice when every quoted field holds exactly one delimiter (the second unit-test
-  limitation);
+- (done in round 8: the multitable tail, an explicit header decision for `sniff()`, and the
+  quote choice when every quoted field holds exactly one delimiter);
+- the first-record header cues inside `load()`'s structure stage (needs a Pollock-gated
+  experiment);
 - glued header names: measured as ambiguous without a header profile, left as the documented
   ceiling (5 files, 0.0012 simple).
