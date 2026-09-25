@@ -15,17 +15,21 @@ Measures (per system, exact match after one normalisation applied to every syste
 delimiter / quote / escape character that does not occur in the file is "none", and an escape
 equal to the quote char means doubled quotes, i.e. "none"):
   delimiter acc, quote acc, escape acc, full dialect acc (all three), failures (exception /
-  timeout -> counted wrong). Reported on all files and on the "messy" subset (annotated by a
-  human because the automatic normal-form detection could not decide - the hard files).
+  timeout -> counted wrong). Reported on all files and on the human-annotated subset (files
+  whose dialect the automatic normal-form detection could not decide). This is not the CSV
+  Wrangling paper's "messy" subset (files with a non-standard dialect); README.md's CSV
+  Wrangling section reports that one.
   header-present acc on the blind hand-labelled sample harness/external/header_labels.tsv
   (labelled from the first lines of each file BEFORE any system's output was looked at; CSV
   Wrangling has no header annotation).
 Loaders are additionally run end to end (load(bytes)) to count exceptions and the files whose
 output differs from the first loader listed (what a candidate's repairs change on real data).
 
-Our header decision: the loaders have no explicit header flag (they emit the first row either
-way), so ours = the loader's own `header_like(first_row, next_rows)` on its structured output -
-the rule its multi-row-header / multitable logic uses.
+Our header decision: a loader module that defines `detect(data)` (sieve 0.2 on, the function
+behind `sieve.sniff()`) is scored on it: its dialect and its first-record header test. For a
+loader without it (sieve 0.1, c0-csvsniff), which emits the first row either way, ours = the
+loader's own `header_like(first_row, next_rows)` on its structured output - the rule its
+multi-row-header / multitable logic uses.
 
 Writes runs/external.<name>.tsv (per file) and prints the table. CPU: 1 process, nice it.
 The per-file results behind README.md are in results/external/.
@@ -93,6 +97,9 @@ def decode(data):
 # ------------------------------------------------------------------ systems: -> (d, q, e, header)
 def sys_ours(mod):
     def run(data, path):
+        if hasattr(mod, "detect"):  # sieve.sniff(): dialect + first-record header
+            d, q, e, hdr = mod.detect(data)
+            return mod.decode(data), d, q, e, hdr
         mod.strong.cache_clear()
         mod.typed.cache_clear()
         text = mod.decode(data)
@@ -238,9 +245,9 @@ def main():
             print(f"load(): {v} differs from {p} on {len(ch)} files: {ch[:25]}", file=sys.stderr)
 
     print(f"\nExternal dialect check - CSV Wrangling test-set files still reachable "
-          f"({table[0][1]} files, {table[0][2]} messy/human-annotated); header on "
+          f"({table[0][1]} files, {table[0][2]} human-annotated); header on "
           f"{table[0][3]['hdr_n']} blind hand-labelled files")
-    print(f"| system | delimiter | quote | escape | full dialect | full, messy only | header present | failures | s |")
+    print(f"| system | delimiter | quote | escape | full dialect | full, human-annotated only | header present | failures | s |")
     print("|---|---|---|---|---|---|---|---|---|")
     for name, n, nm, acc, dt in table:
         pct = lambda x, d: f"{100 * x / d:.1f}%" if d else "-"
