@@ -23,7 +23,7 @@ from typing import NamedTuple, Optional
 
 from . import loader as _loader
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = ["Dialect", "load", "load_bytes", "sniff", "__version__"]
 
 
