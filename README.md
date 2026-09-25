@@ -184,7 +184,8 @@ Caveats:
   are the comparable ones.
 - **The 200 dev header labels** (CSV Wrangling has no header annotation) were drawn from the
   dev split with a fixed seed, excluding the 100 files of the 89-label test sample, and labelled
-  under a protocol written before the first label: the labeller saw only the first 8 lines of
+  under a protocol written before the first label by an LLM-assisted annotation pass (not a
+  person, and not human-verified); the labeller saw only the first 8 lines of
   each file (each cut to 160 characters), before any system was run on those files, and
   nothing else about the file (name, URL, source, dialect annotation or any detector output).
   The question is the one above: a title, comment, note or metadata line above the table
@@ -227,7 +228,7 @@ those 322 alone, full-dialect accuracy is sieve 0.2.0 98.4, CleverCSV 0.7.4 97.5
 0.1.0 95.0. The 89 header labels were not used for development.
 
 **Header caveat.** CSV Wrangling has no header annotation. The 89 header labels come from one
-annotator (the author), who read the first 5 lines of 100 seeded-random files before any
+annotator: an LLM-assisted annotation pass (not a person, and not human-verified) that read the first 5 lines of 100 seeded-random files before any
 system's output was seen, and excluded 11 as ambiguous. sieve 0.1.0 has no explicit header
 flag (it emits the first row either way); its "header present" is its own `header_like(first
 row, next rows)` test, the one its structure rules use. sieve 0.2.0's is `sniff().has_header`.

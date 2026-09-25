@@ -173,7 +173,7 @@ On the 654 files DuckDB can read, full dialect accuracy is: sieve 94.8, CleverCS
 DuckDB 87.6, Sniffer 85.0. The speed pass (H7) changed no output on these 800 files.
 
 **Header caveat.** CSV Wrangling has no header annotation. The 89 labels come from one
-annotator (the author), who read the first 5 lines of 100 seeded-random files **before** any
+annotator: an LLM-assisted annotation pass (not a person, and not human-verified) that read the first 5 lines of 100 seeded-random files **before** any
 system's output was seen. 11 files were excluded as ambiguous. sieve has no explicit header
 flag (it emits the first row either way). Its "header present" is its own
 `header_like(first row, next rows)` test, the one its structure rules use. Treat the column as
@@ -313,7 +313,7 @@ The setups are not equivalent. sieve's script passes only the file path; sieve d
 
 Limitations:
 - All Pollock files derive from one source table, so these scores cannot show that sieve's row repairs generalise. Other evidence is limited: dialect detection on 800 real files from the CSV Wrangling set (95.2% full dialect, CleverCSV 97.1%) and synthetic test cases.
-- Header detection is weak on real files: 67% on 89 hand-labelled files (CleverCSV and csv.Sniffer: 76%).
+- Header detection is weak on real files: 67% on 89 labelled files (LLM-assisted labels, not human-verified) (CleverCSV and csv.Sniffer: 76%).
 - Five files whose header row lost a separator are left unrepaired.
 
 Throughput is 54 files/s in the container (one process, file read included).

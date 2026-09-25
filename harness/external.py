@@ -19,7 +19,7 @@ equal to the quote char means doubled quotes, i.e. "none"):
   whose dialect the automatic normal-form detection could not decide). This is not the CSV
   Wrangling paper's "messy" subset (files with a non-standard dialect); README.md's CSV
   Wrangling section reports that one.
-  header-present acc on the blind hand-labelled sample harness/external/header_labels.tsv
+  header-present acc on the blind labelled sample (LLM-assisted labels, not human-verified) harness/external/header_labels.tsv
   (labelled from the first lines of each file BEFORE any system's output was looked at; CSV
   Wrangling has no header annotation).
 Loaders are additionally run end to end (load(bytes)) to count exceptions and the files whose
@@ -246,7 +246,7 @@ def main():
 
     print(f"\nExternal dialect check - CSV Wrangling test-set files still reachable "
           f"({table[0][1]} files, {table[0][2]} human-annotated); header on "
-          f"{table[0][3]['hdr_n']} blind hand-labelled files")
+          f"{table[0][3]['hdr_n']} blind labelled files")
     print(f"| system | delimiter | quote | escape | full dialect | full, human-annotated only | header present | failures | s |")
     print("|---|---|---|---|---|---|---|---|---|")
     for name, n, nm, acc, dt in table:
