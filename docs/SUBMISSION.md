@@ -11,6 +11,8 @@ submits. sieve 0.2.0 replaced the dialect detector and scores 9.9972 / 9.9939 on
 2,290 files through the same harness (README); `sut/sieve/` in this repository now vendors
 0.2.0, and the 0.2.0 end-to-end Docker run has not been done.
 
+**Status:** merged into Pollock as [PR #7](https://github.com/HPI-Information-Systems/Pollock/pull/7) on 2026-09-28. The merged row is sieve 0.1.0 (9.9971 / 9.9922).
+
 ## Claim in one paragraph
 
 sieve is a pure-Python CSV loader, standard library only (`sieve/`: `loader.py` with about 880
